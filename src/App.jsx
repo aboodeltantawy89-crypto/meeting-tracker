@@ -1,31 +1,29 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import * as db from './db'
 
-// ─── helpers ────────────────────────────────────────────
-function getWeekLabel(offset = 0) {
+const DAY_NAMES = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت']
+
+function getWeekLabel(offset = 0, meetingDay = 1) {
   const now = new Date()
   const day = now.getDay()
-  const diff = (day === 0 ? -6 : 1 - day) + offset * 7
-  const monday = new Date(now)
-  monday.setDate(now.getDate() + diff)
-  const dd = String(monday.getDate()).padStart(2, '0')
-  const mm = String(monday.getMonth() + 1).padStart(2, '0')
-  return `الاثنين ${dd}/${mm}/${monday.getFullYear()}`
+  let diff = meetingDay - day
+  const date = new Date(now)
+  date.setDate(now.getDate() + diff + offset * 7)
+  const dd = String(date.getDate()).padStart(2, '0')
+  const mm = String(date.getMonth() + 1).padStart(2, '0')
+  return `${DAY_NAMES[meetingDay]} ${dd}/${mm}/${date.getFullYear()}`
 }
 
 const weekKey = (offset) => `week_${offset}`
 
-// ════════════════════════════════════════════════════════
 export default function App() {
-  // ── core state ──
   const [loading, setLoading]   = useState(true)
   const [error, setError]       = useState(null)
   const [weekOffset, setWeekOffset] = useState(0)
+  const [meetingDay, setMeetingDay] = useState(1)
   const [members, setMembers]   = useState([])
-  const [tasks, setTasks]       = useState([])       // ALL tasks from DB
-  const [notes, setNotes]       = useState([])       // ALL notes from DB
-
-  // ── UI state ──
+  const [tasks, setTasks]       = useState([])
+  const [notes, setNotes]       = useState([])
   const [activeTab, setActiveTab]   = useState('')
   const [mainView, setMainView]     = useState('tasks')
   const [newTask, setNewTask]       = useState('')
@@ -34,26 +32,28 @@ export default function App() {
   const [showWeekModal, setShowWeekModal]   = useState(false)
   const [showHistory, setShowHistory]       = useState(false)
   const [showMembersModal, setShowMembersModal] = useState(false)
+  const [showDayModal, setShowDayModal]     = useState(false)
   const [newMemberName, setNewMemberName]   = useState('')
   const [confirmDelete, setConfirmDelete]   = useState(null)
   const noteTimers = useRef({})
 
   const wKey = weekKey(weekOffset)
 
-  // ── initial load ────────────────────────────────────
   useEffect(() => {
     async function load() {
       try {
-        const [offset, mems, allTasks, allNotes] = await Promise.all([
+        const [offset, mems, allTasks, allNotes, savedDay] = await Promise.all([
           db.getWeekOffset(),
           db.getMembers(),
           db.getAllTasks(),
           db.getAllNotes(),
+          db.getSetting('meeting_day'),
         ])
         setWeekOffset(offset)
         setMembers(mems)
         setTasks(allTasks)
         setNotes(allNotes)
+        if (savedDay !== null) setMeetingDay(parseInt(savedDay))
         setActiveTab(mems[0]?.id || '')
       } catch (e) {
         setError('تعذّر الاتصال بقاعدة البيانات. تحقق من إعدادات Supabase.')
@@ -65,12 +65,10 @@ export default function App() {
     load()
   }, [])
 
-  // ── derived: tasks for current week ─────────────────
   const weekTasks = tasks.filter(t => t.week_key === wKey)
   const getMemberTasks = (memberId, wk = wKey) =>
     tasks.filter(t => t.member_id === memberId && t.week_key === wk)
 
-  // ── derived: notes ───────────────────────────────────
   const getMemberNote = (memberId, wk = wKey) =>
     notes.find(n => n.member_id === memberId && n.week_key === wk)?.content || ''
   const getGlobalNote = (wk = wKey) =>
@@ -79,24 +77,18 @@ export default function App() {
   const setNoteLocal = (memberId, wk, content) => {
     setNotes(prev => {
       const idx = prev.findIndex(n => n.member_id === memberId && n.week_key === wk)
-      if (idx >= 0) {
-        const next = [...prev]; next[idx] = { ...next[idx], content }; return next
-      }
+      if (idx >= 0) { const next = [...prev]; next[idx] = { ...next[idx], content }; return next }
       return [...prev, { member_id: memberId, week_key: wk, content }]
     })
   }
 
   const handleNoteChange = (memberId, content) => {
     setNoteLocal(memberId, wKey, content)
-    // debounce DB write 800ms
     const key = `${memberId}__${wKey}`
     clearTimeout(noteTimers.current[key])
-    noteTimers.current[key] = setTimeout(() => {
-      db.upsertNote(memberId, wKey, content)
-    }, 800)
+    noteTimers.current[key] = setTimeout(() => db.upsertNote(memberId, wKey, content), 800)
   }
 
-  // ── stats ─────────────────────────────────────────────
   const getMemberStats = (memberId, wk = wKey) => {
     const t = getMemberTasks(memberId, wk)
     return { total: t.length, done: t.filter(x => x.done).length }
@@ -106,7 +98,6 @@ export default function App() {
     return { total: acc.total + s.total, done: acc.done + s.done }
   }, { total: 0, done: 0 })
 
-  // ── task actions ──────────────────────────────────────
   const addTask = async () => {
     if (!newTask.trim()) return
     const task = { id: Date.now(), member_id: activeTab, week_key: wKey, text: newTask.trim(), done: false }
@@ -125,24 +116,25 @@ export default function App() {
     await db.removeTask(id)
   }
 
-  // ── week advance ─────────────────────────────────────
   const advanceWeek = async () => {
     const nextOffset = weekOffset + 1
     const nextKey = weekKey(nextOffset)
-    // carry incomplete tasks
     const incomplete = weekTasks
       .filter(t => !t.done)
       .map(t => ({ ...t, id: Date.now() + Math.random(), week_key: nextKey, done: false }))
-
     setTasks(prev => [...prev, ...incomplete])
     for (const t of incomplete) await db.insertTask(t)
-
     setWeekOffset(nextOffset)
     await db.setWeekOffset(nextOffset)
     setShowWeekModal(false)
   }
 
-  // ── member actions ────────────────────────────────────
+  const handleChangeMeetingDay = async (day) => {
+    setMeetingDay(day)
+    await db.setSetting('meeting_day', String(day))
+    setShowDayModal(false)
+  }
+
   const addMember = async () => {
     if (!newMemberName.trim()) return
     const id = `m_${Date.now()}`
@@ -158,7 +150,7 @@ export default function App() {
     setMembers(rem)
     setConfirmDelete(null)
     if (activeTab === id && rem.length > 0) setActiveTab(rem[0].id)
-    await db.deleteMember(id)  // cascade deletes tasks too
+    await db.deleteMember(id)
     setTasks(prev => prev.filter(t => t.member_id !== id))
   }
 
@@ -169,20 +161,16 @@ export default function App() {
     setEditingMember(null)
   }
 
-  const allWeekOffsets = [...new Set(tasks.map(t => parseInt(t.week_key.replace('week_', ''))))]
-    .sort((a, b) => b - a)
-
+  const allWeekOffsets = [...new Set(tasks.map(t => parseInt(t.week_key.replace('week_', ''))))].sort((a, b) => b - a)
   const activeMember = members.find(m => m.id === activeTab)
   const notesCount = members.filter(m => getMemberNote(m.id).trim()).length + (getGlobalNote().trim() ? 1 : 0)
 
-  // ══════════════════════════════════════════════════════
   if (loading) return (
     <div style={{ minHeight:'100vh', background:'#0f1117', display:'flex', alignItems:'center', justifyContent:'center', fontFamily:"'Cairo',sans-serif", direction:'rtl' }}>
       <div style={{ textAlign:'center', color:'#4ade80' }}>
         <div style={{ fontSize:40, marginBottom:16, animation:'spin 1.2s linear infinite', display:'inline-block' }}>⟳</div>
         <style>{`@keyframes spin{to{transform:rotate(360deg)}}`}</style>
         <div style={{ fontSize:16, fontWeight:700 }}>جاري التحميل...</div>
-        <div style={{ fontSize:12, color:'#334155', marginTop:6 }}>الاتصال بقاعدة البيانات</div>
       </div>
     </div>
   )
@@ -193,12 +181,10 @@ export default function App() {
         <div style={{ fontSize:36, marginBottom:14 }}>⚠️</div>
         <div style={{ fontSize:16, fontWeight:700, color:'#fca5a5', marginBottom:10 }}>خطأ في الاتصال</div>
         <div style={{ fontSize:13, color:'#ef4444', lineHeight:1.8 }}>{error}</div>
-        <div style={{ fontSize:12, color:'#7f1d1d', marginTop:16 }}>تأكد من إضافة VITE_SUPABASE_URL و VITE_SUPABASE_ANON_KEY في ملف .env</div>
       </div>
     </div>
   )
 
-  // ══════════════════════════════════════════════════════
   return (
     <div style={{ minHeight:'100vh', background:'#0f1117', fontFamily:"'Cairo','Segoe UI',sans-serif", direction:'rtl', color:'#e8eaf0' }}>
       <style>{`
@@ -216,6 +202,8 @@ export default function App() {
         .icon-btn{cursor:pointer;background:none;border:none;transition:opacity .15s}.icon-btn:hover{opacity:.65}
         .week-row{cursor:pointer;transition:background .12s;border-radius:9px}.week-row:hover{background:#161923 !important}
         .member-row{transition:background .12s;border-radius:9px}.member-row:hover{background:#161923 !important}
+        .day-btn{cursor:pointer;border:none;transition:all .15s;border-radius:9px;padding:10px 0;font-family:'Cairo',sans-serif;font-size:14px;font-weight:600}
+        .day-btn:hover{transform:scale(1.03)}
         @keyframes slidePanel{from{transform:translateX(-30px);opacity:0}to{transform:translateX(0);opacity:1}}
         .note-area{resize:none;width:100%;background:#0f1117;border:1px solid #1e2d40;border-radius:9px;padding:12px 14px;color:#cbd5e1;font-size:13px;line-height:1.8;direction:rtl;transition:border-color .2s}
         .note-area:focus{outline:none;border-color:#22c55e44}
@@ -223,11 +211,16 @@ export default function App() {
         .view-toggle{cursor:pointer;border:none;transition:all .18s;border-radius:8px}
       `}</style>
 
-      {/* ── HEADER ── */}
+      {/* HEADER */}
       <div style={{ background:'linear-gradient(135deg,#111827,#0d1f2d)', borderBottom:'1px solid #1a2744', padding:'13px 18px', display:'flex', alignItems:'center', justifyContent:'space-between', flexWrap:'wrap', gap:10 }}>
         <div>
           <div style={{ fontSize:19, fontWeight:900, color:'#4ade80' }}>📋 متابعة التكليفات</div>
-          <div style={{ fontSize:12, color:'#64748b', marginTop:2 }}>{getWeekLabel(weekOffset)}</div>
+          <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:2 }}>
+            <span style={{ fontSize:12, color:'#64748b' }}>{getWeekLabel(weekOffset, meetingDay)}</span>
+            <button onClick={() => setShowDayModal(true)} style={{ fontSize:10, color:'#475569', background:'#13161f', border:'1px solid #1e2d40', borderRadius:6, padding:'1px 8px', cursor:'pointer' }}>
+              ✏️ تغيير اليوم
+            </button>
+          </div>
         </div>
         <div style={{ display:'flex', gap:7, alignItems:'center', flexWrap:'wrap' }}>
           <div style={{ background:'#0f1117', borderRadius:9, padding:'5px 12px', border:'1px solid #1a2744', textAlign:'center' }}>
@@ -243,9 +236,8 @@ export default function App() {
         </div>
       </div>
 
-      {/* ── BODY ── */}
+      {/* BODY */}
       <div style={{ display:'flex', height:'calc(100vh - 73px)' }}>
-
         {/* Sidebar */}
         <div style={{ width:185, background:'#0a0c14', borderLeft:'1px solid #14172a', overflowY:'auto', padding:'10px 7px', display:'flex', flexDirection:'column' }}>
           <div style={{ display:'flex', gap:4, margin:'0 0 10px', background:'#13161f', borderRadius:9, padding:4 }}>
@@ -255,9 +247,7 @@ export default function App() {
               {notesCount > 0 && <span style={{ position:'absolute', top:2, left:2, width:7, height:7, borderRadius:'50%', background:'#60a5fa' }} />}
             </button>
           </div>
-
           <div style={{ fontSize:10, color:'#334155', padding:'0 7px 6px', letterSpacing:1 }}>الأعضاء ({members.length})</div>
-
           {members.map(member => {
             const s = getMemberStats(member.id)
             const isActive = activeTab === member.id
@@ -273,7 +263,6 @@ export default function App() {
               </button>
             )
           })}
-
           {mainView === 'notes' && (
             <button className="tab-btn" onClick={() => setActiveTab('__global__')} style={{ width:'100%', padding:'8px 9px', marginTop:6, borderRadius:8, textAlign:'right', background:activeTab==='__global__'?'linear-gradient(135deg,#1e3a5f,#0d2137)':'transparent', border:activeTab==='__global__'?'1px solid #60a5fa33':'1px solid #1a2744', color:activeTab==='__global__'?'#60a5fa':'#475569', display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:12 }}>
               <span>📌 ملاحظات عامة</span>
@@ -282,10 +271,8 @@ export default function App() {
           )}
         </div>
 
-        {/* Main panel */}
+        {/* Main */}
         <div style={{ flex:1, overflowY:'auto', padding:'20px 22px' }}>
-
-          {/* ── TASKS VIEW ── */}
           {mainView === 'tasks' && activeMember && (
             <>
               <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:16 }}>
@@ -303,12 +290,10 @@ export default function App() {
                   </div>
                 )}
               </div>
-
               <div style={{ display:'flex', gap:8, marginBottom:14, background:'#13161f', borderRadius:9, padding:9, border:'1px solid #1a1d2e' }}>
                 <input value={newTask} onChange={e => setNewTask(e.target.value)} onKeyDown={e => e.key==='Enter' && addTask()} placeholder="أضف تكليفاً جديداً..." style={{ flex:1, background:'#0f1117', border:'1px solid #1e2d40', borderRadius:7, padding:'8px 11px', color:'#e8eaf0', fontSize:13, direction:'rtl' }} />
                 <button onClick={addTask} style={{ background:'#166534', border:'none', color:'#4ade80', borderRadius:7, padding:'8px 16px', cursor:'pointer', fontWeight:700, fontSize:13 }}>+ إضافة</button>
               </div>
-
               <div style={{ display:'flex', flexDirection:'column', gap:6 }}>
                 {getMemberTasks(activeTab).length === 0 ? (
                   <div style={{ textAlign:'center', padding:'50px 20px', color:'#1e293b', fontSize:14 }}><div style={{ fontSize:34, marginBottom:10 }}>📝</div>لا توجد تكليفات لهذا الأسبوع</div>
@@ -326,7 +311,6 @@ export default function App() {
             </>
           )}
 
-          {/* ── NOTES VIEW ── */}
           {mainView === 'notes' && (
             <div className="slide-in">
               {activeTab === '__global__' ? (
@@ -347,12 +331,11 @@ export default function App() {
                     <div style={{ width:38, height:38, borderRadius:'50%', background:'linear-gradient(135deg,#1e3a5f,#0d2137)', border:'2px solid #60a5fa22', display:'flex', alignItems:'center', justifyContent:'center', fontSize:15, fontWeight:700, color:'#60a5fa', flexShrink:0 }}>{activeMember.name.charAt(0)}</div>
                     <div>
                       <div style={{ fontSize:17, fontWeight:700 }}>{activeMember.name}</div>
-                      <div style={{ fontSize:11, color:'#475569', marginTop:1 }}>ملاحظات • {getWeekLabel(weekOffset)}</div>
+                      <div style={{ fontSize:11, color:'#475569', marginTop:1 }}>ملاحظات • {getWeekLabel(weekOffset, meetingDay)}</div>
                     </div>
                   </div>
                   <textarea className="note-area" rows={14} placeholder={`ملاحظات خاصة بـ ${activeMember.name}...`} value={getMemberNote(activeTab)} onChange={e => handleNoteChange(activeTab, e.target.value)} />
                   <div style={{ fontSize:11, color:'#1e293b', marginTop:8, textAlign:'left' }}>{getMemberNote(activeTab).trim()?`${getMemberNote(activeTab).length} حرف • محفوظ تلقائياً`:'ابدأ الكتابة...'}</div>
-
                   {getMemberTasks(activeTab).length > 0 && (
                     <div style={{ marginTop:18, background:'#13161f', borderRadius:9, padding:14, border:'1px solid #1a1d2e' }}>
                       <div style={{ fontSize:12, color:'#475569', marginBottom:8, display:'flex', justifyContent:'space-between' }}>
@@ -371,12 +354,31 @@ export default function App() {
               ) : null}
             </div>
           )}
-
           {!activeMember && mainView === 'tasks' && (
             <div style={{ textAlign:'center', padding:'80px 20px', color:'#334155' }}><div style={{ fontSize:38, marginBottom:12 }}>👥</div>أضف عضواً للبدء</div>
           )}
         </div>
       </div>
+
+      {/* ── MEETING DAY MODAL ── */}
+      {showDayModal && (
+        <div className="fade-in" onClick={e => e.target===e.currentTarget && setShowDayModal(false)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
+          <div style={{ background:'#0d0f1a', borderRadius:14, padding:28, border:'1px solid #1a2744', maxWidth:340, width:'90%' }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
+              <div style={{ fontSize:16, fontWeight:700 }}>📅 يوم الاجتماع</div>
+              <button className="icon-btn" onClick={() => setShowDayModal(false)} style={{ fontSize:20, color:'#475569' }}>×</button>
+            </div>
+            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
+              {DAY_NAMES.map((name, idx) => (
+                <button key={idx} className="day-btn" onClick={() => handleChangeMeetingDay(idx)} style={{ background: meetingDay === idx ? 'linear-gradient(135deg,#166534,#14532d)' : '#13161f', color: meetingDay === idx ? '#4ade80' : '#94a3b8', border: meetingDay === idx ? '1px solid #22c55e44' : '1px solid #1a1d2e' }}>
+                  {name}
+                  {meetingDay === idx && <span style={{ marginRight:6, fontSize:11 }}>✓</span>}
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── HISTORY PANEL ── */}
       {showHistory && (
@@ -398,7 +400,7 @@ export default function App() {
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
                     <div>
                       <div style={{ fontSize:13, fontWeight:700, color:isCurrent?'#4ade80':'#94a3b8', display:'flex', alignItems:'center', gap:6 }}>
-                        {getWeekLabel(offset)}
+                        {getWeekLabel(offset, meetingDay)}
                         {isCurrent && <span style={{ fontSize:9, color:'#22c55e', background:'#0d2b1a', border:'1px solid #22c55e33', borderRadius:20, padding:'1px 7px' }}>الحالي</span>}
                       </div>
                       <div style={{ fontSize:11, color:'#475569', marginTop:3 }}>{ws.done}/{ws.total} تكليف • {pct}%</div>
@@ -467,7 +469,7 @@ export default function App() {
           <div style={{ background:'#0d0f1a', borderRadius:14, padding:28, border:'1px solid #1a2744', maxWidth:380, width:'90%', textAlign:'center' }}>
             <div style={{ fontSize:34, marginBottom:12 }}>🗓</div>
             <div style={{ fontSize:16, fontWeight:700, marginBottom:5 }}>الانتقال للأسبوع الجديد</div>
-            <div style={{ fontSize:12, color:'#64748b', marginBottom:14 }}>{getWeekLabel(weekOffset+1)}</div>
+            <div style={{ fontSize:12, color:'#64748b', marginBottom:14 }}>{getWeekLabel(weekOffset+1, meetingDay)}</div>
             {(() => { const p = members.reduce((a,m) => a+getMemberTasks(m.id).filter(t=>!t.done).length, 0); return p>0 ? <div style={{ background:'#1c1500', border:'1px solid #78350f33', borderRadius:9, padding:'11px 14px', marginBottom:18, fontSize:13, color:'#fbbf24' }}>⚠️ سيتم ترحيل <strong>{p}</strong> تكليف غير مكتمل</div> : <div style={{ background:'#0d2b1a', border:'1px solid #22c55e22', borderRadius:9, padding:'11px 14px', marginBottom:18, fontSize:13, color:'#4ade80' }}>✅ جميع التكليفات مكتملة!</div> })()}
             <div style={{ display:'flex', gap:9, justifyContent:'center' }}>
               <button onClick={() => setShowWeekModal(false)} style={{ background:'#13161f', border:'1px solid #1e293b', color:'#64748b', borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:13 }}>إلغاء</button>
