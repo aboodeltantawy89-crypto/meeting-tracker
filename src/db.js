@@ -80,3 +80,19 @@ export async function upsertNote(memberId, weekKey, content) {
     { onConflict: 'member_id,week_key' }
   )
 }
+
+// ─── Generic Settings ────────────────────────────────────
+export async function getSetting(key) {
+  const { data } = await supabase
+    .from('app_settings')
+    .select('value')
+    .eq('key', key)
+    .single()
+  return data ? data.value : null
+}
+
+export async function setSetting(key, value) {
+  await supabase
+    .from('app_settings')
+    .upsert({ key, value })
+}
