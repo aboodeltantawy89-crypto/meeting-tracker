@@ -3,8 +3,11 @@ import * as db from './db'
 
 const DAY_NAMES = ['الأحد','الاثنين','الثلاثاء','الأربعاء','الخميس','الجمعة','السبت']
 
-function getWeekLabel(offset = 0, meetingDay = 1) {
-  const now = new Date()
+function getWeekLabel(offset = 0, meetingDay = 1, customDate = null) {
+  if (customDate && offset === 0) {
+    return `${DAY_NAMES[meetingDay]} ${customDate}`
+  }
+  const now = customDate ? new Date(customDate.split('/').reverse().join('-')) : new Date()
   const day = now.getDay()
   let diff = meetingDay - day
   const date = new Date(now)
@@ -21,8 +24,12 @@ export default function App() {
   const [error, setError]       = useState(null)
   const [weekOffset, setWeekOffset] = useState(0)
   const [meetingDay, setMeetingDay] = useState(1)
+  const [customDate, setCustomDate] = useState(null)   // 'dd/mm/yyyy' or null
+  const [customDateInput, setCustomDateInput] = useState('')
   const [members, setMembers]   = useState([])
-  const [tasks, setTasks]       = useState([])
+  const [tasks, setTasks]             = useState([])
+  const [recurring, setRecurring]     = useState([])   // { id, member_id, text, done_this_week: {weekKey: bool} }
+  const [newRecurring, setNewRecurring] = useState('')
   const [notes, setNotes]       = useState([])
   const [activeTab, setActiveTab]   = useState('')
   const [mainView, setMainView]     = useState('tasks')
@@ -42,18 +49,22 @@ export default function App() {
   useEffect(() => {
     async function load() {
       try {
-        const [offset, mems, allTasks, allNotes, savedDay] = await Promise.all([
+        const [offset, mems, allTasks, allNotes, savedDay, savedCustomDate, savedRecurring] = await Promise.all([
           db.getWeekOffset(),
           db.getMembers(),
           db.getAllTasks(),
           db.getAllNotes(),
           db.getSetting('meeting_day'),
+          db.getSetting('custom_date'),
+          db.getSetting('recurring_tasks'),
         ])
         setWeekOffset(offset)
         setMembers(mems)
         setTasks(allTasks)
         setNotes(allNotes)
         if (savedDay !== null) setMeetingDay(parseInt(savedDay))
+        if (savedCustomDate) { setCustomDate(savedCustomDate); setCustomDateInput(savedCustomDate) }
+        if (savedRecurring) { try { setRecurring(JSON.parse(savedRecurring)) } catch {} }
         setActiveTab(mems[0]?.id || '')
       } catch (e) {
         setError('تعذّر الاتصال بقاعدة البيانات. تحقق من إعدادات Supabase.')
@@ -132,7 +143,51 @@ export default function App() {
   const handleChangeMeetingDay = async (day) => {
     setMeetingDay(day)
     await db.setSetting('meeting_day', String(day))
+  }
+
+  const handleSaveCustomDate = async () => {
+    // validate dd/mm/yyyy
+    const parts = customDateInput.split('/')
+    if (parts.length === 3 && parts[0].length <= 2 && parts[1].length <= 2 && parts[2].length === 4) {
+      setCustomDate(customDateInput)
+      await db.setSetting('custom_date', customDateInput)
+      setShowDayModal(false)
+    }
+  }
+
+  const handleClearCustomDate = async () => {
+    setCustomDate(null)
+    setCustomDateInput('')
+    await db.setSetting('custom_date', '')
     setShowDayModal(false)
+  }
+
+  // ── recurring tasks ──────────────────────────────────
+  const getMemberRecurring = (memberId) => recurring.filter(r => r.member_id === memberId)
+
+  const saveRecurring = async (newList) => {
+    setRecurring(newList)
+    await db.setSetting('recurring_tasks', JSON.stringify(newList))
+  }
+
+  const addRecurring = async () => {
+    if (!newRecurring.trim()) return
+    const item = { id: Date.now(), member_id: activeTab, text: newRecurring.trim(), done_this_week: {} }
+    await saveRecurring([...recurring, item])
+    setNewRecurring('')
+  }
+
+  const toggleRecurring = async (id) => {
+    const updated = recurring.map(r => {
+      if (r.id !== id) return r
+      const done = { ...r.done_this_week, [wKey]: !r.done_this_week?.[wKey] }
+      return { ...r, done_this_week: done }
+    })
+    await saveRecurring(updated)
+  }
+
+  const deleteRecurring = async (id) => {
+    await saveRecurring(recurring.filter(r => r.id !== id))
   }
 
   const addMember = async () => {
@@ -216,7 +271,7 @@ export default function App() {
         <div>
           <div style={{ fontSize:19, fontWeight:900, color:'#4ade80' }}>📋 متابعة التكليفات</div>
           <div style={{ display:'flex', alignItems:'center', gap:8, marginTop:2 }}>
-            <span style={{ fontSize:12, color:'#64748b' }}>{getWeekLabel(weekOffset, meetingDay)}</span>
+            <span style={{ fontSize:12, color:'#64748b' }}>{getWeekLabel(weekOffset, meetingDay, customDate)}</span>
             <button onClick={() => setShowDayModal(true)} style={{ fontSize:10, color:'#475569', background:'#13161f', border:'1px solid #1e2d40', borderRadius:6, padding:'1px 8px', cursor:'pointer' }}>
               ✏️ تغيير اليوم
             </button>
@@ -331,7 +386,7 @@ export default function App() {
                     <div style={{ width:38, height:38, borderRadius:'50%', background:'linear-gradient(135deg,#1e3a5f,#0d2137)', border:'2px solid #60a5fa22', display:'flex', alignItems:'center', justifyContent:'center', fontSize:15, fontWeight:700, color:'#60a5fa', flexShrink:0 }}>{activeMember.name.charAt(0)}</div>
                     <div>
                       <div style={{ fontSize:17, fontWeight:700 }}>{activeMember.name}</div>
-                      <div style={{ fontSize:11, color:'#475569', marginTop:1 }}>ملاحظات • {getWeekLabel(weekOffset, meetingDay)}</div>
+                      <div style={{ fontSize:11, color:'#475569', marginTop:1 }}>ملاحظات • {getWeekLabel(weekOffset, meetingDay, customDate)}</div>
                     </div>
                   </div>
                   <textarea className="note-area" rows={14} placeholder={`ملاحظات خاصة بـ ${activeMember.name}...`} value={getMemberNote(activeTab)} onChange={e => handleNoteChange(activeTab, e.target.value)} />
@@ -354,6 +409,47 @@ export default function App() {
               ) : null}
             </div>
           )}
+          {/* ── RECURRING TASKS ── */}
+          {mainView === 'tasks' && activeMember && (
+            <div style={{ marginTop:28 }}>
+              <div style={{ display:'flex', alignItems:'center', gap:8, marginBottom:12 }}>
+                <div style={{ width:3, height:18, background:'linear-gradient(#a78bfa,#7c3aed)', borderRadius:4 }} />
+                <span style={{ fontSize:14, fontWeight:700, color:'#a78bfa' }}>تكليفات متكررة</span>
+                <span style={{ fontSize:10, color:'#4c1d95', background:'#1e1b4b', border:'1px solid #4c1d9566', borderRadius:20, padding:'1px 8px' }}>تترحل كل أسبوع تلقائياً</span>
+              </div>
+
+              {/* add recurring */}
+              <div style={{ display:'flex', gap:8, marginBottom:12, background:'#13161f', borderRadius:9, padding:9, border:'1px solid #1e1b4b' }}>
+                <input
+                  value={newRecurring}
+                  onChange={e => setNewRecurring(e.target.value)}
+                  onKeyDown={e => e.key==='Enter' && addRecurring()}
+                  placeholder="أضف تكليفاً متكرراً..."
+                  style={{ flex:1, background:'#0f1117', border:'1px solid #2d2060', borderRadius:7, padding:'8px 11px', color:'#e8eaf0', fontSize:13, direction:'rtl' }}
+                />
+                <button onClick={addRecurring} style={{ background:'linear-gradient(135deg,#5b21b6,#4c1d95)', border:'none', color:'#c4b5fd', borderRadius:7, padding:'8px 16px', cursor:'pointer', fontWeight:700, fontSize:13 }}>+ إضافة</button>
+              </div>
+
+              {getMemberRecurring(activeTab).length === 0 ? (
+                <div style={{ textAlign:'center', padding:'24px 20px', color:'#2d2060', fontSize:13 }}>
+                  <div style={{ fontSize:26, marginBottom:6 }}>🔁</div>لا توجد تكليفات متكررة
+                </div>
+              ) : getMemberRecurring(activeTab).map((r, idx) => {
+                const isDone = r.done_this_week?.[wKey] || false
+                return (
+                  <div key={r.id} className="task-row slide-in" style={{ background:'#0f0d1a', borderRadius:8, border:isDone?'1px solid #5b21b6':'1px solid #1e1b4b', padding:'10px 13px', display:'flex', alignItems:'center', gap:10, marginBottom:6, animationDelay:`${idx*.04}s` }}>
+                    <div onClick={() => toggleRecurring(r.id)} style={{ width:19, height:19, borderRadius:5, cursor:'pointer', flexShrink:0, border:isDone?'none':'2px solid #4c1d95', background:isDone?'linear-gradient(135deg,#7c3aed,#5b21b6)':'transparent', display:'flex', alignItems:'center', justifyContent:'center', transition:'all .15s' }}>
+                      {isDone && <span style={{ color:'#fff', fontSize:11 }}>✓</span>}
+                    </div>
+                    <span style={{ flex:1, fontSize:13, color:isDone?'#4c1d95':'#c4b5fd', textDecoration:isDone?'line-through':'none' }}>{r.text}</span>
+                    <span style={{ fontSize:10, color:'#4c1d95', background:'#1e1b4b', borderRadius:20, padding:'1px 8px', border:'1px solid #2d2060', flexShrink:0 }}>🔁</span>
+                    <button className="del-btn" onClick={() => deleteRecurring(r.id)} style={{ color:'#ef4444', fontSize:15 }}>×</button>
+                  </div>
+                )
+              })}
+            </div>
+          )}
+
           {!activeMember && mainView === 'tasks' && (
             <div style={{ textAlign:'center', padding:'80px 20px', color:'#334155' }}><div style={{ fontSize:38, marginBottom:12 }}>👥</div>أضف عضواً للبدء</div>
           )}
@@ -363,18 +459,47 @@ export default function App() {
       {/* ── MEETING DAY MODAL ── */}
       {showDayModal && (
         <div className="fade-in" onClick={e => e.target===e.currentTarget && setShowDayModal(false)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
-          <div style={{ background:'#0d0f1a', borderRadius:14, padding:28, border:'1px solid #1a2744', maxWidth:340, width:'90%' }}>
-            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginBottom:20 }}>
-              <div style={{ fontSize:16, fontWeight:700 }}>📅 يوم الاجتماع</div>
+          <div style={{ background:'#0d0f1a', borderRadius:14, padding:24, border:'1px solid #1a2744', maxWidth:360, width:'90%', display:'flex', flexDirection:'column', gap:18 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontSize:16, fontWeight:700 }}>📅 إعدادات الاجتماع</div>
               <button className="icon-btn" onClick={() => setShowDayModal(false)} style={{ fontSize:20, color:'#475569' }}>×</button>
             </div>
-            <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:8 }}>
-              {DAY_NAMES.map((name, idx) => (
-                <button key={idx} className="day-btn" onClick={() => handleChangeMeetingDay(idx)} style={{ background: meetingDay === idx ? 'linear-gradient(135deg,#166534,#14532d)' : '#13161f', color: meetingDay === idx ? '#4ade80' : '#94a3b8', border: meetingDay === idx ? '1px solid #22c55e44' : '1px solid #1a1d2e' }}>
-                  {name}
-                  {meetingDay === idx && <span style={{ marginRight:6, fontSize:11 }}>✓</span>}
-                </button>
-              ))}
+
+            {/* Day picker */}
+            <div>
+              <div style={{ fontSize:12, color:'#475569', marginBottom:10 }}>يوم الاجتماع الأسبوعي</div>
+              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:7 }}>
+                {DAY_NAMES.map((name, idx) => (
+                  <button key={idx} className="day-btn" onClick={() => handleChangeMeetingDay(idx)} style={{ background: meetingDay === idx ? 'linear-gradient(135deg,#166534,#14532d)' : '#13161f', color: meetingDay === idx ? '#4ade80' : '#94a3b8', border: meetingDay === idx ? '1px solid #22c55e44' : '1px solid #1a1d2e' }}>
+                    {meetingDay === idx && <span style={{ marginLeft:4, fontSize:11 }}>✓ </span>}{name}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Divider */}
+            <div style={{ borderTop:'1px solid #1a2744' }} />
+
+            {/* Custom date */}
+            <div>
+              <div style={{ fontSize:12, color:'#475569', marginBottom:10 }}>أو حدد تاريخ الاجتماع القادم يدوياً</div>
+              <div style={{ display:'flex', gap:8 }}>
+                <input
+                  value={customDateInput}
+                  onChange={e => setCustomDateInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && handleSaveCustomDate()}
+                  placeholder="يوم/شهر/سنة  مثال: 15/06/2025"
+                  style={{ flex:1, background:'#0f1117', border:'1px solid #1e2d40', borderRadius:7, padding:'8px 11px', color:'#e8eaf0', fontSize:13, direction:'rtl' }}
+                />
+                <button onClick={handleSaveCustomDate} style={{ background:'#166534', border:'none', color:'#4ade80', borderRadius:7, padding:'8px 14px', cursor:'pointer', fontWeight:700, fontSize:13 }}>حفظ</button>
+              </div>
+              {customDate && (
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:10, background:'#0d2b1a', borderRadius:8, padding:'8px 12px', border:'1px solid #22c55e22' }}>
+                  <span style={{ fontSize:12, color:'#4ade80' }}>📌 التاريخ الحالي: {customDate}</span>
+                  <button onClick={handleClearCustomDate} style={{ background:'none', border:'none', color:'#475569', cursor:'pointer', fontSize:12 }}>× إلغاء</button>
+                </div>
+              )}
+              <div style={{ fontSize:11, color:'#334155', marginTop:8 }}>لو حددت تاريخ يدوي هيظهر بدل الحساب التلقائي للأسبوع الحالي فقط</div>
             </div>
           </div>
         </div>
@@ -400,7 +525,7 @@ export default function App() {
                   <div style={{ display:'flex', justifyContent:'space-between', alignItems:'flex-start' }}>
                     <div>
                       <div style={{ fontSize:13, fontWeight:700, color:isCurrent?'#4ade80':'#94a3b8', display:'flex', alignItems:'center', gap:6 }}>
-                        {getWeekLabel(offset, meetingDay)}
+                        {getWeekLabel(offset, meetingDay, offset === weekOffset ? customDate : null)}
                         {isCurrent && <span style={{ fontSize:9, color:'#22c55e', background:'#0d2b1a', border:'1px solid #22c55e33', borderRadius:20, padding:'1px 7px' }}>الحالي</span>}
                       </div>
                       <div style={{ fontSize:11, color:'#475569', marginTop:3 }}>{ws.done}/{ws.total} تكليف • {pct}%</div>
@@ -469,7 +594,7 @@ export default function App() {
           <div style={{ background:'#0d0f1a', borderRadius:14, padding:28, border:'1px solid #1a2744', maxWidth:380, width:'90%', textAlign:'center' }}>
             <div style={{ fontSize:34, marginBottom:12 }}>🗓</div>
             <div style={{ fontSize:16, fontWeight:700, marginBottom:5 }}>الانتقال للأسبوع الجديد</div>
-            <div style={{ fontSize:12, color:'#64748b', marginBottom:14 }}>{getWeekLabel(weekOffset+1, meetingDay)}</div>
+            <div style={{ fontSize:12, color:'#64748b', marginBottom:14 }}>{getWeekLabel(weekOffset+1, meetingDay, null)}</div>
             {(() => { const p = members.reduce((a,m) => a+getMemberTasks(m.id).filter(t=>!t.done).length, 0); return p>0 ? <div style={{ background:'#1c1500', border:'1px solid #78350f33', borderRadius:9, padding:'11px 14px', marginBottom:18, fontSize:13, color:'#fbbf24' }}>⚠️ سيتم ترحيل <strong>{p}</strong> تكليف غير مكتمل</div> : <div style={{ background:'#0d2b1a', border:'1px solid #22c55e22', borderRadius:9, padding:'11px 14px', marginBottom:18, fontSize:13, color:'#4ade80' }}>✅ جميع التكليفات مكتملة!</div> })()}
             <div style={{ display:'flex', gap:9, justifyContent:'center' }}>
               <button onClick={() => setShowWeekModal(false)} style={{ background:'#13161f', border:'1px solid #1e293b', color:'#64748b', borderRadius:8, padding:'8px 20px', cursor:'pointer', fontSize:13 }}>إلغاء</button>
