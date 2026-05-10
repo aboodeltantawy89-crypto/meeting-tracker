@@ -39,7 +39,8 @@ export default function App() {
   const [mainView, setMainView]     = useState('tasks')
   const [newTask, setNewTask]       = useState('')
   const [editingMember, setEditingMember] = useState(null)
-  const [editingTask, setEditingTask]     = useState(null)   // { id, text }
+  const [editingTask, setEditingTask]         = useState(null)   // { id, text }
+  const [editingRecurring, setEditingRecurring] = useState(null) // { id, text }
   const [editNameVal, setEditNameVal]     = useState('')
   const [showWeekModal, setShowWeekModal]   = useState(false)
   const [showHistory, setShowHistory]       = useState(false)
@@ -215,6 +216,13 @@ export default function App() {
 
   const deleteRecurring = async (id) => {
     await saveRecurring(recurring.filter(r => r.id !== id))
+  }
+
+  const handleUpdateRecurring = async (id, newText) => {
+    if (!newText.trim()) return
+    const updated = recurring.map(r => r.id === id ? { ...r, text: newText.trim() } : r)
+    await saveRecurring(updated)
+    setEditingRecurring(null)
   }
 
   const addMember = async () => {
@@ -489,9 +497,26 @@ export default function App() {
                     <div onClick={() => toggleRecurring(r.id)} style={{ width:19, height:19, borderRadius:5, cursor:'pointer', flexShrink:0, border:isDone?'none':'2px solid #4c1d95', background:isDone?'linear-gradient(135deg,#7c3aed,#5b21b6)':'transparent', display:'flex', alignItems:'center', justifyContent:'center', transition:'all .15s' }}>
                       {isDone && <span style={{ color:'#fff', fontSize:11 }}>✓</span>}
                     </div>
-                    <span style={{ flex:1, fontSize:13, color:isDone?'#4c1d95':'#c4b5fd', textDecoration:isDone?'line-through':'none' }}>{r.text}</span>
-                    <span style={{ fontSize:10, color:'#4c1d95', background:'#1e1b4b', borderRadius:20, padding:'1px 8px', border:'1px solid #2d2060', flexShrink:0 }}>🔁</span>
-                    <button className="del-btn" onClick={() => deleteRecurring(r.id)} style={{ color:'#ef4444', fontSize:15 }}>×</button>
+                    {editingRecurring?.id === r.id ? (
+                      <>
+                        <input
+                          autoFocus
+                          value={editingRecurring.text}
+                          onChange={e => setEditingRecurring({ ...editingRecurring, text: e.target.value })}
+                          onKeyDown={e => { if (e.key==='Enter') handleUpdateRecurring(r.id, editingRecurring.text); if (e.key==='Escape') setEditingRecurring(null) }}
+                          style={{ flex:1, background:'#0f1117', border:'1px solid #7c3aed', borderRadius:6, padding:'4px 9px', color:'#e8eaf0', fontSize:13 }}
+                        />
+                        <button onClick={() => handleUpdateRecurring(r.id, editingRecurring.text)} style={{ background:'#5b21b6', border:'none', color:'#c4b5fd', borderRadius:5, padding:'3px 10px', cursor:'pointer', fontSize:12, flexShrink:0 }}>✓</button>
+                        <button onClick={() => setEditingRecurring(null)} style={{ background:'#1a1d2e', border:'none', color:'#64748b', borderRadius:5, padding:'3px 7px', cursor:'pointer', fontSize:12, flexShrink:0 }}>✕</button>
+                      </>
+                    ) : (
+                      <>
+                        <span style={{ flex:1, fontSize:13, color:isDone?'#4c1d95':'#c4b5fd', textDecoration:isDone?'line-through':'none' }}>{r.text}</span>
+                        <span style={{ fontSize:10, color:'#4c1d95', background:'#1e1b4b', borderRadius:20, padding:'1px 8px', border:'1px solid #2d2060', flexShrink:0 }}>🔁</span>
+                        <button className="del-btn" onClick={() => setEditingRecurring({ id: r.id, text: r.text })} style={{ color:'#94a3b8', fontSize:13 }}>✏️</button>
+                        <button className="del-btn" onClick={() => deleteRecurring(r.id)} style={{ color:'#ef4444', fontSize:15 }}>×</button>
+                      </>
+                    )}
                   </div>
                 )
               })}
