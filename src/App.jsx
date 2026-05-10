@@ -115,7 +115,14 @@ export default function App() {
   }
   const totalStats = members.reduce((acc, m) => {
     const s = getMemberStats(m.id)
-    return { total: acc.total + s.total, done: acc.done + s.done }
+    // add recurring tasks for this member
+    const rec = getMemberRecurring(m.id)
+    const recTotal = rec.length
+    const recDone = rec.filter(r => r.done_this_week?.[wKey]).length
+    return {
+      total: acc.total + s.total + recTotal,
+      done: acc.done + s.done + recDone
+    }
   }, { total: 0, done: 0 })
 
   const addTask = async () => {
