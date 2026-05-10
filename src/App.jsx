@@ -113,6 +113,9 @@ export default function App() {
     const t = getMemberTasks(memberId, wk)
     return { total: t.length, done: t.filter(x => x.done).length }
   }
+  // ── recurring tasks ──────────────────────────────────
+  const getMemberRecurring = (memberId) => recurring.filter(r => r.member_id === memberId)
+
   const totalStats = members.reduce((acc, m) => {
     const s = getMemberStats(m.id)
     // add recurring tasks for this member
@@ -179,8 +182,7 @@ export default function App() {
     setShowDayModal(false)
   }
 
-  // ── recurring tasks ──────────────────────────────────
-  const getMemberRecurring = (memberId) => recurring.filter(r => r.member_id === memberId)
+
 
   const saveRecurring = async (newList) => {
     setRecurring(newList)
