@@ -5,9 +5,13 @@ const DAY_NAMES = ['الأحد','الاثنين','الثلاثاء','الأرب�
 
 function getWeekLabel(offset = 0, meetingDay = 1, customDate = null) {
   if (customDate && offset === 0) {
-    return `${DAY_NAMES[meetingDay]} ${customDate}`
+    // derive day name from the actual chosen date
+    const parts = customDate.split('/')
+    const dateObj = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`)
+    const dayName = DAY_NAMES[dateObj.getDay()]
+    return `${dayName} ${customDate}`
   }
-  const now = customDate ? new Date(customDate.split('/').reverse().join('-')) : new Date()
+  const now = new Date()
   const day = now.getDay()
   let diff = meetingDay - day
   const date = new Date(now)
@@ -63,7 +67,12 @@ export default function App() {
         setTasks(allTasks)
         setNotes(allNotes)
         if (savedDay !== null) setMeetingDay(parseInt(savedDay))
-        if (savedCustomDate) { setCustomDate(savedCustomDate); setCustomDateInput(savedCustomDate) }
+        if (savedCustomDate) {
+          setCustomDate(savedCustomDate)
+          // convert dd/mm/yyyy → yyyy-mm-dd for the date input
+          const p = savedCustomDate.split('/')
+          if (p.length === 3) setCustomDateInput(`${p[2]}-${p[1]}-${p[0]}`)
+        }
         if (savedRecurring) { try { setRecurring(JSON.parse(savedRecurring)) } catch {} }
         setActiveTab(mems[0]?.id || '')
       } catch (e) {
@@ -145,14 +154,15 @@ export default function App() {
     await db.setSetting('meeting_day', String(day))
   }
 
-  const handleSaveCustomDate = async () => {
-    // validate dd/mm/yyyy
-    const parts = customDateInput.split('/')
-    if (parts.length === 3 && parts[0].length <= 2 && parts[1].length <= 2 && parts[2].length === 4) {
-      setCustomDate(customDateInput)
-      await db.setSetting('custom_date', customDateInput)
-      setShowDayModal(false)
-    }
+  const handleSaveCustomDate = async (isoVal) => {
+    // isoVal is yyyy-mm-dd from <input type="date">
+    if (!isoVal) return
+    const [y, m, d] = isoVal.split('-')
+    const formatted = `${d}/${m}/${y}`
+    setCustomDate(formatted)
+    setCustomDateInput(isoVal)
+    await db.setSetting('custom_date', formatted)
+    setShowDayModal(false)
   }
 
   const handleClearCustomDate = async () => {
@@ -461,45 +471,30 @@ export default function App() {
         <div className="fade-in" onClick={e => e.target===e.currentTarget && setShowDayModal(false)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
           <div style={{ background:'#0d0f1a', borderRadius:14, padding:24, border:'1px solid #1a2744', maxWidth:360, width:'90%', display:'flex', flexDirection:'column', gap:18 }}>
             <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
-              <div style={{ fontSize:16, fontWeight:700 }}>📅 إعدادات الاجتماع</div>
+              <div style={{ fontSize:16, fontWeight:700 }}>📅 تاريخ الاجتماع</div>
               <button className="icon-btn" onClick={() => setShowDayModal(false)} style={{ fontSize:20, color:'#475569' }}>×</button>
             </div>
 
-            {/* Day picker */}
+            {/* Calendar picker */}
             <div>
-              <div style={{ fontSize:12, color:'#475569', marginBottom:10 }}>يوم الاجتماع الأسبوعي</div>
-              <div style={{ display:'grid', gridTemplateColumns:'1fr 1fr', gap:7 }}>
-                {DAY_NAMES.map((name, idx) => (
-                  <button key={idx} className="day-btn" onClick={() => handleChangeMeetingDay(idx)} style={{ background: meetingDay === idx ? 'linear-gradient(135deg,#166534,#14532d)' : '#13161f', color: meetingDay === idx ? '#4ade80' : '#94a3b8', border: meetingDay === idx ? '1px solid #22c55e44' : '1px solid #1a1d2e' }}>
-                    {meetingDay === idx && <span style={{ marginLeft:4, fontSize:11 }}>✓ </span>}{name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Divider */}
-            <div style={{ borderTop:'1px solid #1a2744' }} />
-
-            {/* Custom date */}
-            <div>
-              <div style={{ fontSize:12, color:'#475569', marginBottom:10 }}>أو حدد تاريخ الاجتماع القادم يدوياً</div>
-              <div style={{ display:'flex', gap:8 }}>
-                <input
-                  value={customDateInput}
-                  onChange={e => setCustomDateInput(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleSaveCustomDate()}
-                  placeholder="يوم/شهر/سنة  مثال: 15/06/2025"
-                  style={{ flex:1, background:'#0f1117', border:'1px solid #1e2d40', borderRadius:7, padding:'8px 11px', color:'#e8eaf0', fontSize:13, direction:'rtl' }}
-                />
-                <button onClick={handleSaveCustomDate} style={{ background:'#166534', border:'none', color:'#4ade80', borderRadius:7, padding:'8px 14px', cursor:'pointer', fontWeight:700, fontSize:13 }}>حفظ</button>
-              </div>
+              <div style={{ fontSize:12, color:'#475569', marginBottom:10 }}>اختار تاريخ الاجتماع القادم</div>
+              <input
+                type="date"
+                value={customDateInput}
+                onChange={e => handleSaveCustomDate(e.target.value)}
+                style={{
+                  width:'100%', background:'#0f1117', border:'1px solid #1e2d40',
+                  borderRadius:9, padding:'10px 14px', color:'#e8eaf0', fontSize:14,
+                  direction:'ltr', cursor:'pointer', colorScheme:'dark'
+                }}
+              />
               {customDate && (
-                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:10, background:'#0d2b1a', borderRadius:8, padding:'8px 12px', border:'1px solid #22c55e22' }}>
-                  <span style={{ fontSize:12, color:'#4ade80' }}>📌 التاريخ الحالي: {customDate}</span>
+                <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center', marginTop:12, background:'#0d2b1a', borderRadius:8, padding:'8px 12px', border:'1px solid #22c55e22' }}>
+                  <span style={{ fontSize:13, color:'#4ade80' }}>📌 {customDate}</span>
                   <button onClick={handleClearCustomDate} style={{ background:'none', border:'none', color:'#475569', cursor:'pointer', fontSize:12 }}>× إلغاء</button>
                 </div>
               )}
-              <div style={{ fontSize:11, color:'#334155', marginTop:8 }}>لو حددت تاريخ يدوي هيظهر بدل الحساب التلقائي للأسبوع الحالي فقط</div>
+              <div style={{ fontSize:11, color:'#334155', marginTop:8 }}>اليوم بيطلع تلقائي من التاريخ اللي اخترته</div>
             </div>
           </div>
         </div>
