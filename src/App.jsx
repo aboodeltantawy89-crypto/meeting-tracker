@@ -324,15 +324,19 @@ export default function App() {
           <div style={{ fontSize:10, color:'#334155', padding:'0 7px 6px', letterSpacing:1 }}>الأعضاء ({members.length})</div>
           {members.map(member => {
             const s = getMemberStats(member.id)
+            const rec = getMemberRecurring(member.id)
+            const recDone = rec.filter(r => r.done_this_week?.[wKey]).length
+            const combinedTotal = s.total + rec.length
+            const combinedDone = s.done + recDone
             const isActive = activeTab === member.id
-            const allDone = s.total > 0 && s.done === s.total
+            const allDone = combinedTotal > 0 && combinedDone === combinedTotal
             const hasNote = getMemberNote(member.id).trim().length > 0
             return (
               <button key={member.id} className="tab-btn" onClick={() => setActiveTab(member.id)} style={{ width:'100%', padding:'8px 9px', marginBottom:3, borderRadius:8, textAlign:'right', background:isActive?(mainView==='notes'?'linear-gradient(135deg,#1e3a5f,#0d2137)':'linear-gradient(135deg,#166534,#14532d)'):'transparent', border:isActive?(mainView==='notes'?'1px solid #60a5fa33':'1px solid #22c55e33'):'1px solid transparent', color:isActive?(mainView==='notes'?'#60a5fa':'#4ade80'):allDone?'#22c55e':'#94a3b8', display:'flex', justifyContent:'space-between', alignItems:'center', fontSize:13, fontWeight:isActive?700:400 }}>
                 <span style={{ overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', maxWidth:105 }}>{member.name}</span>
                 <div style={{ display:'flex', gap:4, alignItems:'center', flexShrink:0 }}>
                   {mainView==='notes' && hasNote && <span style={{ width:6, height:6, borderRadius:'50%', background:'#60a5fa', display:'inline-block' }} />}
-                  {mainView==='tasks' && <span style={{ fontSize:10, background:allDone?'#166534':isActive?'#0d2b1a':'#13161f', color:allDone?'#4ade80':'#475569', borderRadius:20, padding:'1px 6px' }}>{s.done}/{s.total}</span>}
+                  {mainView==='tasks' && <span style={{ fontSize:10, background:allDone?'#166534':isActive?'#0d2b1a':'#13161f', color:allDone?'#4ade80':'#475569', borderRadius:20, padding:'1px 6px' }}>{combinedDone}/{combinedTotal}</span>}
                 </div>
               </button>
             )
