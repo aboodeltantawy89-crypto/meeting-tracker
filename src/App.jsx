@@ -48,6 +48,11 @@ export default function App() {
   const [showDayModal, setShowDayModal]     = useState(false)
   const [newMemberName, setNewMemberName]   = useState('')
   const [confirmDelete, setConfirmDelete]   = useState(null)
+  const [dragOver, setDragOver]             = useState(null)
+  const [memberContacts, setMemberContacts] = useState({})  // { memberId: { phone, email } }
+  const [showContactModal, setShowContactModal] = useState(null) // memberId
+  const [contactInput, setContactInput]     = useState({ phone:'', email:'' })
+  const [showExportModal, setShowExportModal] = useState(false)
   const noteTimers = useRef({})
 
   const wKey = weekKey(weekOffset)
@@ -76,6 +81,8 @@ export default function App() {
           if (p.length === 3) setCustomDateInput(`${p[2]}-${p[1]}-${p[0]}`)
         }
         if (savedRecurring) { try { setRecurring(JSON.parse(savedRecurring)) } catch {} }
+        const savedContacts = await db.getSetting('member_contacts')
+        if (savedContacts) { try { setMemberContacts(JSON.parse(savedContacts)) } catch {} }
         setActiveTab(mems[0]?.id || '')
       } catch (e) {
         setError('تعذّر الاتصال بقاعدة البيانات. تحقق من إعدادات Supabase.')
@@ -225,6 +232,92 @@ export default function App() {
     setEditingRecurring(null)
   }
 
+  // ── drag reorder ─────────────────────────────────────
+  const handleDragStart = (e, idx) => { e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('idx', idx) }
+  const handleDrop = async (e, toIdx) => {
+    e.preventDefault()
+    const fromIdx = parseInt(e.dataTransfer.getData('idx'))
+    if (fromIdx === toIdx) return
+    const reordered = [...members]
+    const [moved] = reordered.splice(fromIdx, 1)
+    reordered.splice(toIdx, 0, moved)
+    const updated = reordered.map((m, i) => ({ ...m, sort_order: i }))
+    setMembers(updated)
+    setDragOver(null)
+    for (const m of updated) await db.updateMemberOrder(m.id, m.sort_order)
+  }
+
+  // ── contacts ──────────────────────────────────────────
+  const saveContacts = async (newContacts) => {
+    setMemberContacts(newContacts)
+    await db.setSetting('member_contacts', JSON.stringify(newContacts))
+  }
+
+  const sendWhatsApp = (memberId, memberName) => {
+    const phone = memberContacts[memberId]?.phone
+    if (!phone) { setShowContactModal(memberId); setContactInput({ phone:'', email: memberContacts[memberId]?.email||'' }); return }
+    const msg = encodeURIComponent(`✅ ${memberName} أتم مراجعة تكليفاته في اجتماع ${getWeekLabel(weekOffset, meetingDay, customDate)}`)
+    window.open(`https://wa.me/${phone.replace(/[^0-9]/g,'')}?text=${msg}`, '_blank')
+  }
+
+  const sendEmail = (memberId, memberName) => {
+    const email = memberContacts[memberId]?.email
+    if (!email) { setShowContactModal(memberId); setContactInput({ phone: memberContacts[memberId]?.phone||'', email:'' }); return }
+    const subject = encodeURIComponent(`✅ مراجعة تكليفات ${memberName}`)
+    const body = encodeURIComponent(`${memberName} أتم مراجعة تكليفاته في اجتماع ${getWeekLabel(weekOffset, meetingDay, customDate)}`)
+    window.open(`mailto:${email}?subject=${subject}&body=${body}`)
+  }
+
+  // ── PDF export ────────────────────────────────────────
+  const exportToPDF = () => {
+    const label = getWeekLabel(weekOffset, meetingDay, customDate)
+    let html = `<html dir="rtl"><head><meta charset="utf-8"><style>
+      body{font-family:Arial,sans-serif;padding:32px;color:#1a1a2e;direction:rtl}
+      h1{color:#166534;font-size:22px;margin-bottom:4px}
+      .subtitle{color:#64748b;font-size:13px;margin-bottom:28px}
+      .member{margin-bottom:24px;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden}
+      .member-header{background:#f0fdf4;padding:12px 16px;font-weight:700;font-size:15px;color:#166534;display:flex;justify-content:space-between}
+      .badge{background:#dcfce7;color:#166534;border-radius:20px;padding:2px 10px;font-size:12px}
+      .task{padding:8px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;font-size:13px}
+      .task:last-child{border-bottom:none}
+      .check{width:16px;height:16px;border-radius:4px;border:2px solid #cbd5e1;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center}
+      .done .check{background:#22c55e;border-color:#22c55e;color:white;font-size:10px}
+      .done span{text-decoration:line-through;color:#94a3b8}
+      .rec-header{background:#faf5ff;padding:8px 16px;font-size:12px;color:#7c3aed;font-weight:700}
+      .rec-task{padding:8px 16px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:10px;font-size:13px;color:#7c3aed}
+      @media print{body{padding:0}}
+    </style></head><body>
+    <h1>📋 تقرير الاجتماع</h1>
+    <div class="subtitle">${label}</div>`
+
+    for (const m of members) {
+      const mTasks = getMemberTasks(m.id)
+      const mRec = getMemberRecurring(m.id)
+      const total = mTasks.length + mRec.length
+      const done = mTasks.filter(t=>t.done).length + mRec.filter(r=>r.done_this_week?.[wKey]).length
+      if (total === 0) continue
+      html += `<div class="member">
+        <div class="member-header">${m.name} <span class="badge">${done}/${total}</span></div>`
+      for (const t of mTasks) {
+        html += `<div class="task ${t.done?'done':''}"><div class="check">${t.done?'✓':''}</div><span>${t.text}</span></div>`
+      }
+      if (mRec.length > 0) {
+        html += `<div class="rec-header">🔁 تكليفات متكررة</div>`
+        for (const r of mRec) {
+          const rd = r.done_this_week?.[wKey]
+          html += `<div class="rec-task ${rd?'done':''}"><div class="check" style="border-color:#7c3aed">${rd?'✓':''}</div><span>${r.text}</span></div>`
+        }
+      }
+      html += `</div>`
+    }
+    html += `</body></html>`
+    const w = window.open('', '_blank')
+    w.document.write(html)
+    w.document.close()
+    w.focus()
+    setTimeout(() => w.print(), 500)
+  }
+
   const addMember = async () => {
     if (!newMemberName.trim()) return
     const id = `m_${Date.now()}`
@@ -322,6 +415,7 @@ export default function App() {
           </div>
           <button onClick={() => setShowHistory(true)} style={{ background:'#1a2744', border:'1px solid #1e3a5f', color:'#94a3b8', borderRadius:8, padding:'7px 12px', cursor:'pointer', fontSize:13 }}>🕓 السجل</button>
           <button onClick={() => setShowMembersModal(true)} style={{ background:'#1a2744', border:'1px solid #1e3a5f', color:'#94a3b8', borderRadius:8, padding:'7px 12px', cursor:'pointer', fontSize:13 }}>👥 الأعضاء</button>
+          <button onClick={() => setShowExportModal(true)} style={{ background:'#1a2744', border:'1px solid #1e3a5f', color:'#94a3b8', borderRadius:8, padding:'7px 12px', cursor:'pointer', fontSize:13 }}>📄 تصدير PDF</button>
           <button onClick={() => setShowWeekModal(true)} style={{ background:'linear-gradient(135deg,#166534,#14532d)', border:'none', color:'#4ade80', borderRadius:8, padding:'7px 14px', cursor:'pointer', fontWeight:700, fontSize:13 }}>🗓 أسبوع جديد</button>
         </div>
       </div>
@@ -381,6 +475,8 @@ export default function App() {
                   <div style={{ display:'flex', gap:6, alignItems:'center' }}>
                     <span style={{ fontSize:17, fontWeight:700 }}>{activeMember.name}</span>
                     <button className="icon-btn" onClick={() => { setEditingMember(activeTab); setEditNameVal(activeMember.name) }} style={{ fontSize:13, color:'#334155' }}>✏️</button>
+                    <button onClick={() => sendWhatsApp(activeTab, activeMember.name)} title="إرسال واتساب" style={{ background:'#0a2918', border:'1px solid #166534', color:'#4ade80', borderRadius:7, padding:'3px 10px', cursor:'pointer', fontSize:12 }}>📱 واتساب</button>
+                    <button onClick={() => sendEmail(activeTab, activeMember.name)} title="إرسال إيميل" style={{ background:'#1a2744', border:'1px solid #1e3a5f', color:'#60a5fa', borderRadius:7, padding:'3px 10px', cursor:'pointer', fontSize:12 }}>✉️ إيميل</button>
                   </div>
                 )}
               </div>
@@ -618,18 +714,34 @@ export default function App() {
               <input value={newMemberName} onChange={e => setNewMemberName(e.target.value)} onKeyDown={e => e.key==='Enter' && addMember()} placeholder="اسم العضو الجديد..." style={{ flex:1, background:'#13161f', border:'1px solid #1e2d40', borderRadius:7, padding:'8px 11px', color:'#e8eaf0', fontSize:13, direction:'rtl' }} />
               <button onClick={addMember} style={{ background:'#166534', border:'none', color:'#4ade80', borderRadius:7, padding:'8px 14px', cursor:'pointer', fontWeight:700, fontSize:13 }}>+ إضافة</button>
             </div>
+            <div style={{ fontSize:11, color:'#475569', marginBottom:2 }}>اسحب ↕ لتغيير الترتيب</div>
             <div style={{ overflowY:'auto', display:'flex', flexDirection:'column', gap:5 }}>
-              {members.map(member => (
-                <div key={member.id} className="member-row" style={{ padding:'9px 12px', background:'#13161f', border:'1px solid #1a1d2e', display:'flex', alignItems:'center', gap:9 }}>
-                  <div style={{ width:30, height:30, borderRadius:'50%', flexShrink:0, background:'linear-gradient(135deg,#166534,#0d2b1a)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:13, fontWeight:700, color:'#4ade80' }}>{member.name.charAt(0)}</div>
+              {members.map((member, idx) => (
+                <div key={member.id}
+                  draggable
+                  onDragStart={e => handleDragStart(e, idx)}
+                  onDragOver={e => { e.preventDefault(); setDragOver(idx) }}
+                  onDragLeave={() => setDragOver(null)}
+                  onDrop={e => handleDrop(e, idx)}
+                  className="member-row"
+                  style={{ padding:'9px 12px', background: dragOver===idx ? '#1a2744' : '#13161f', border: dragOver===idx ? '1px solid #22c55e44' : '1px solid #1a1d2e', display:'flex', alignItems:'center', gap:9, cursor:'grab' }}>
+                  <span style={{ color:'#334155', fontSize:14, flexShrink:0 }}>⠿</span>
+                  <div style={{ width:28, height:28, borderRadius:'50%', flexShrink:0, background:'linear-gradient(135deg,#166534,#0d2b1a)', display:'flex', alignItems:'center', justifyContent:'center', fontSize:12, fontWeight:700, color:'#4ade80' }}>{member.name.charAt(0)}</div>
                   {editingMember === member.id ? (
                     <div style={{ flex:1, display:'flex', gap:6 }}>
                       <input value={editNameVal} onChange={e => setEditNameVal(e.target.value)} onKeyDown={e => e.key==='Enter' && saveEditName()} style={{ flex:1, background:'#0f1117', border:'1px solid #22c55e', borderRadius:6, padding:'3px 8px', color:'#e8eaf0', fontSize:13 }} autoFocus />
                       <button onClick={saveEditName} style={{ background:'#166534', border:'none', color:'#4ade80', borderRadius:5, padding:'3px 9px', cursor:'pointer', fontSize:12 }}>✓</button>
                       <button onClick={() => setEditingMember(null)} style={{ background:'#1a1d2e', border:'none', color:'#64748b', borderRadius:5, padding:'3px 7px', cursor:'pointer', fontSize:12 }}>✕</button>
                     </div>
-                  ) : <span style={{ flex:1, fontSize:13 }}>{member.name}</span>}
+                  ) : (
+                    <div style={{ flex:1, display:'flex', alignItems:'center', gap:6 }}>
+                      <span style={{ fontSize:13 }}>{member.name}</span>
+                      {memberContacts[member.id]?.phone && <span style={{ fontSize:10, color:'#166534' }}>📱</span>}
+                      {memberContacts[member.id]?.email && <span style={{ fontSize:10, color:'#1e3a5f' }}>✉️</span>}
+                    </div>
+                  )}
                   <div style={{ display:'flex', gap:4, flexShrink:0 }}>
+                    <button className="icon-btn" onClick={() => { setShowContactModal(member.id); setContactInput({ phone: memberContacts[member.id]?.phone||'', email: memberContacts[member.id]?.email||'' }) }} style={{ fontSize:12, color:'#475569', padding:'3px 5px' }} title="بيانات التواصل">📞</button>
                     <button className="icon-btn" onClick={() => { setEditingMember(member.id); setEditNameVal(member.name) }} style={{ fontSize:12, color:'#475569', padding:'3px 5px' }}>✏️</button>
                     {confirmDelete === member.id ? (
                       <>
@@ -642,6 +754,55 @@ export default function App() {
               ))}
             </div>
             <div style={{ fontSize:11, color:'#334155', textAlign:'center' }}>{members.length} عضو • حذف العضو لا يمسح سجلاته</div>
+          </div>
+        </div>
+      )}
+
+      {/* ── CONTACT MODAL ── */}
+      {showContactModal && (
+        <div className="fade-in" onClick={e => e.target===e.currentTarget && setShowContactModal(null)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1100 }}>
+          <div style={{ background:'#0d0f1a', borderRadius:14, padding:24, border:'1px solid #1a2744', width:360, display:'flex', flexDirection:'column', gap:14 }}>
+            <div style={{ display:'flex', justifyContent:'space-between', alignItems:'center' }}>
+              <div style={{ fontSize:15, fontWeight:700 }}>📞 بيانات التواصل — {members.find(m=>m.id===showContactModal)?.name}</div>
+              <button className="icon-btn" onClick={() => setShowContactModal(null)} style={{ fontSize:20, color:'#475569' }}>×</button>
+            </div>
+            <div>
+              <div style={{ fontSize:12, color:'#475569', marginBottom:6 }}>رقم واتساب (مع كود الدولة مثل 201xxxxxxxx)</div>
+              <input value={contactInput.phone} onChange={e => setContactInput(p => ({ ...p, phone: e.target.value }))} placeholder="201xxxxxxxxx" style={{ width:'100%', background:'#13161f', border:'1px solid #1e2d40', borderRadius:7, padding:'8px 11px', color:'#e8eaf0', fontSize:13, direction:'ltr' }} />
+            </div>
+            <div>
+              <div style={{ fontSize:12, color:'#475569', marginBottom:6 }}>البريد الإلكتروني</div>
+              <input value={contactInput.email} onChange={e => setContactInput(p => ({ ...p, email: e.target.value }))} placeholder="example@email.com" style={{ width:'100%', background:'#13161f', border:'1px solid #1e2d40', borderRadius:7, padding:'8px 11px', color:'#e8eaf0', fontSize:13, direction:'ltr' }} />
+            </div>
+            <button onClick={async () => { const nc = { ...memberContacts, [showContactModal]: contactInput }; await saveContacts(nc); setShowContactModal(null) }} style={{ background:'linear-gradient(135deg,#166534,#14532d)', border:'none', color:'#4ade80', borderRadius:8, padding:'10px', cursor:'pointer', fontWeight:700, fontSize:14 }}>حفظ</button>
+          </div>
+        </div>
+      )}
+
+      {/* ── EXPORT MODAL ── */}
+      {showExportModal && (
+        <div className="fade-in" onClick={e => e.target===e.currentTarget && setShowExportModal(false)} style={{ position:'fixed', inset:0, background:'rgba(0,0,0,0.75)', display:'flex', alignItems:'center', justifyContent:'center', zIndex:1000 }}>
+          <div style={{ background:'#0d0f1a', borderRadius:14, padding:28, border:'1px solid #1a2744', maxWidth:380, width:'90%', textAlign:'center' }}>
+            <div style={{ fontSize:36, marginBottom:14 }}>📄</div>
+            <div style={{ fontSize:16, fontWeight:700, marginBottom:6 }}>تصدير تقرير الاجتماع</div>
+            <div style={{ fontSize:13, color:'#64748b', marginBottom:20 }}>{getWeekLabel(weekOffset, meetingDay, customDate)}</div>
+            <div style={{ background:'#13161f', borderRadius:9, padding:14, marginBottom:20, textAlign:'right', border:'1px solid #1a1d2e' }}>
+              {members.map(m => {
+                const s = getMemberStats(m.id)
+                const rec = getMemberRecurring(m.id)
+                const total = s.total + rec.length
+                const done = s.done + rec.filter(r=>r.done_this_week?.[wKey]).length
+                if (total === 0) return null
+                return <div key={m.id} style={{ display:'flex', justifyContent:'space-between', padding:'4px 0', borderBottom:'1px solid #1a2744', fontSize:13 }}>
+                  <span style={{ color:'#94a3b8' }}>{m.name}</span>
+                  <span style={{ color: done===total ? '#4ade80' : '#fbbf24' }}>{done}/{total}</span>
+                </div>
+              })}
+            </div>
+            <div style={{ display:'flex', gap:9, justifyContent:'center' }}>
+              <button onClick={() => setShowExportModal(false)} style={{ background:'#13161f', border:'1px solid #1e293b', color:'#64748b', borderRadius:8, padding:'9px 20px', cursor:'pointer', fontSize:13 }}>إلغاء</button>
+              <button onClick={() => { exportToPDF(); setShowExportModal(false) }} style={{ background:'linear-gradient(135deg,#1e3a5f,#0d2137)', border:'none', color:'#60a5fa', borderRadius:8, padding:'9px 20px', cursor:'pointer', fontWeight:700, fontSize:13 }}>🖨️ طباعة / PDF</button>
+            </div>
           </div>
         </div>
       )}
