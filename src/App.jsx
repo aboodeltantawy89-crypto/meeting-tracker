@@ -507,14 +507,14 @@ export default function App() {
                           onKeyDown={e => { if (e.key==='Enter') handleUpdateTask(task.id, editingTask.text); if (e.key==='Escape') setEditingTask(null) }}
                           style={{ flex:1, background:'#0f1117', border:'1px solid #22c55e', borderRadius:6, padding:'4px 9px', color:'#e8eaf0', fontSize:13 }}
                         />
-                        <button onMouseDown={e => { e.preventDefault(); handleUpdateTask(task.id, editingTask.text) }} style={{ background:'#166534', border:'none', color:'#4ade80', borderRadius:5, padding:'3px 10px', cursor:'pointer', fontSize:12, flexShrink:0 }}>✓</button>
-                        <button onMouseDown={e => { e.preventDefault(); setEditingTask(null) }} style={{ background:'#1a1d2e', border:'none', color:'#64748b', borderRadius:5, padding:'3px 7px', cursor:'pointer', fontSize:12, flexShrink:0 }}>✕</button>
+                        <button onPointerDown={e => { e.preventDefault(); e.stopPropagation(); handleUpdateTask(task.id, editingTask.text) }} style={{ background:'#166534', border:'none', color:'#4ade80', borderRadius:5, padding:'3px 10px', cursor:'pointer', fontSize:12, flexShrink:0 }}>✓</button>
+                        <button onPointerDown={e => { e.preventDefault(); e.stopPropagation(); setEditingTask(null) }} style={{ background:'#1a1d2e', border:'none', color:'#64748b', borderRadius:5, padding:'3px 7px', cursor:'pointer', fontSize:12, flexShrink:0 }}>✕</button>
                       </>
                     ) : (
                       <>
                         <span style={{ flex:1, fontSize:13, color:task.done?'#334155':'#cbd5e1', textDecoration:task.done?'line-through':'none' }}>{task.text}</span>
                         {!task.done && <span style={{ fontSize:10, color:'#1e293b', background:'#13161f', borderRadius:20, padding:'1px 7px', border:'1px solid #1e293b' }}>معلّق</span>}
-                        <button className="del-btn" onClick={() => setEditingTask({ id: task.id, text: task.text })} style={{ color:'#94a3b8', fontSize:13 }}>✏️</button>
+                        <button className="del-btn" onPointerDown={e => { e.preventDefault(); setEditingTask({ id: task.id, text: task.text }) }} style={{ color:'#94a3b8', fontSize:13 }}>✏️</button>
                         <button className="del-btn" onClick={() => handleDeleteTask(task.id)} style={{ color:'#ef4444', fontSize:15 }}>×</button>
                       </>
                     )}
@@ -608,8 +608,8 @@ export default function App() {
                           onKeyDown={e => { if (e.key==='Enter') handleUpdateRecurring(r.id, editingRecurring.text); if (e.key==='Escape') setEditingRecurring(null) }}
                           style={{ flex:1, background:'#0f1117', border:'1px solid #7c3aed', borderRadius:6, padding:'4px 9px', color:'#e8eaf0', fontSize:13 }}
                         />
-                        <button onMouseDown={e => { e.preventDefault(); handleUpdateRecurring(r.id, editingRecurring.text) }} style={{ background:'#5b21b6', border:'none', color:'#c4b5fd', borderRadius:5, padding:'3px 10px', cursor:'pointer', fontSize:12, flexShrink:0 }}>✓</button>
-                        <button onMouseDown={e => { e.preventDefault(); setEditingRecurring(null) }} style={{ background:'#1a1d2e', border:'none', color:'#64748b', borderRadius:5, padding:'3px 7px', cursor:'pointer', fontSize:12, flexShrink:0 }}>✕</button>
+                        <button onPointerDown={e => { e.preventDefault(); e.stopPropagation(); handleUpdateRecurring(r.id, editingRecurring.text) }} style={{ background:'#5b21b6', border:'none', color:'#c4b5fd', borderRadius:5, padding:'3px 10px', cursor:'pointer', fontSize:12, flexShrink:0 }}>✓</button>
+                        <button onPointerDown={e => { e.preventDefault(); e.stopPropagation(); setEditingRecurring(null) }} style={{ background:'#1a1d2e', border:'none', color:'#64748b', borderRadius:5, padding:'3px 7px', cursor:'pointer', fontSize:12, flexShrink:0 }}>✕</button>
                       </>
                     ) : (
                       <>
